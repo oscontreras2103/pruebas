@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <WiFi.h>
+#include <ESPmDNS.h>
 #include <HTTPClient.h>
 #include <WebServer.h>
 #include <Adafruit_MPU6050.h>
@@ -145,9 +146,25 @@ void syncTelemetryToFirebase() {
   HTTPClient http;
   http.begin(String(FIREBASE_URL) + "/telemetry.json");
   http.addHeader("Content-Type", "application/json");
-  http.setTimeout(1200);
+  http.setTimeout(2000);
   http.PUT(makeDataJson());
   http.end();
+}
+
+void firebaseTask(void *pvParameters) {
+  // Esperar a que el sistema inicialice
+  vTaskDelay(pdMS_TO_TICKS(2000));
+  for (;;) {
+    if (WiFi.status() == WL_CONNECTED) {
+      HTTPClient http;
+      http.begin(String(FIREBASE_URL) + "/telemetry.json");
+      http.addHeader("Content-Type", "application/json");
+      http.setTimeout(2000);
+      http.PUT(makeDataJson());
+      http.end();
+    }
+    vTaskDelay(pdMS_TO_TICKS(1500));
+  }
 }
 
 void syncAlertToFirebase(const String &timeStr, const String &level, float mag, bool sent) {
@@ -161,18 +178,33 @@ void syncAlertToFirebase(const String &timeStr, const String &level, float mag, 
   http.end();
 }
 
-void setupWebServer() {
-  server.on("/", HTTP_GET, []() {
-    server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-    server.sendHeader("Pragma", "no-cache");
-    server.sendHeader("Expires", "0");
+void handleRoot() {
+  server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  server.sendHeader("Pragma", "no-cache");
+  server.sendHeader("Expires", "0");
+  if (server.method() == HTTP_HEAD) {
+    server.send(200, "text/html", "");
+  } else {
     server.send_P(200, "text/html", htmlPage);
+  }
+}
+
+void setupWebServer() {
+  server.on("/", HTTP_ANY, handleRoot);
+  server.on("/index.html", HTTP_ANY, handleRoot);
+  server.on("/data", HTTP_ANY, []() {
+    if (server.method() == HTTP_HEAD) {
+      server.send(200, "application/json", "");
+    } else {
+      server.send(200, "application/json", makeDataJson());
+    }
   });
-  server.on("/data", HTTP_GET, []() {
-    server.send(200, "application/json", makeDataJson());
-  });
-  server.on("/alerts", HTTP_GET, []() {
-    server.send(200, "application/json", makeAlertsJson());
+  server.on("/alerts", HTTP_ANY, []() {
+    if (server.method() == HTTP_HEAD) {
+      server.send(200, "application/json", "");
+    } else {
+      server.send(200, "application/json", makeAlertsJson());
+    }
   });
   server.begin();
 }
@@ -207,6 +239,12 @@ void setup() {
   }
   Serial.printf("\nConectado. IP asignada: %s\n", WiFi.localIP().toString().c_str());
 
+  // Anuncio mDNS Bonjour para descubrimiento automático en Net Analyzer y red local
+  if (MDNS.begin("safestep")) {
+    MDNS.addService("http", "tcp", 80);
+    Serial.println("[OK] Servicio mDNS activo: http://safestep.local/");
+  }
+
   // Sincronización horaria con servidor NTP (Zona horaria Bogotá UTC-5)
   configTime(TIMEZONE_OFFSET_SEC, DAYLIGHT_OFFSET_SEC, NTP_SERVER_1, NTP_SERVER_2);
   Serial.println("Sincronizando hora con servidor NTP (Bogotá UTC-5)...");
@@ -220,6 +258,17 @@ void setup() {
     Serial.println("[ERR] No se encontró el sensor MPU6050 en GPIO 21/22.");
     Serial.println("[INFO] El servidor web está ACTIVO. Verifique los cables VCC, GND, SDA (21) y SCL (22).");
   }
+
+  // Tarea en segundo plano en Core 0 para sincronizar a Firebase sin interferir con el servidor web (Core 1)
+  xTaskCreatePinnedToCore(
+    firebaseTask,
+    "firebaseTask",
+    8192,
+    NULL,
+    1,
+    NULL,
+    0
+  );
 }
 
 void loop() {
@@ -258,6 +307,14 @@ void loop() {
     float mag = sqrt(last_ax * last_ax + last_ay * last_ay + last_az * last_az);
     lastEventMagnitude = mag;
 
+    // Impresión en monitor serial (5 veces por segundo)
+    static unsigned long lastSerialPrintMillis = 0;
+    if (currentMillis - lastSerialPrintMillis >= 200) {
+      lastSerialPrintMillis = currentMillis;
+      Serial.printf("[MPU6050] Ax:%6.2f Ay:%6.2f Az:%6.2f m/s² | Mag:%6.2f m/s² | Gx:%6.2f Gy:%6.2f Gz:%6.2f | T:%4.1f°C | %s\n",
+                    last_ax, last_ay, last_az, mag, last_gx, last_gy, last_gz, last_temp, currentLevel.c_str());
+    }
+
     if (mag >= THRESH_MODERADO) {
       if (currentMillis - lastAlertMillis >= ALERT_MIN_INTERVAL_MS) {
         lastAlertMillis = currentMillis;
@@ -268,6 +325,8 @@ void loop() {
         } else {
           currentLevel = "Leve";
         }
+
+        Serial.printf("💥 [ALERTA DISPARADA] Magnitud: %.2f m/s² | Severidad: %s\n", mag, currentLevel.c_str());
 
         String eventTime = getBogotaTimeString();
         bool sent = sendWhatsAppAlert(currentLevel, mag, eventTime);
@@ -284,11 +343,5 @@ void loop() {
         currentLevel = "Estable";
       }
     }
-  }
-
-  // Sincronización continua de telemetría a Firebase en la nube
-  if (currentMillis - lastFirebaseSyncMillis >= FIREBASE_SYNC_INTERVAL_MS) {
-    lastFirebaseSyncMillis = currentMillis;
-    syncTelemetryToFirebase();
   }
 }

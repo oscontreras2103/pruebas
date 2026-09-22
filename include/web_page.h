@@ -1050,7 +1050,7 @@ function updateData() {
 }
 
 document.getElementById("ip").innerText = location.hostname;
-setInterval(updateData, 650);
+setInterval(updateData, 250);
 updateData();
 </script>
 
