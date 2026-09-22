@@ -25,3 +25,10 @@
 
 // Capacidad del historial web
 #define MAX_ALERTS 50
+
+// Servidores Locales Evolution API y n8n
+#define EVOLUTION_API_URL    "http://192.168.5.134:8080/message/sendText/safestep"
+#define EVOLUTION_API_KEY    "safestep_evolution_key_2026"
+#define EVOLUTION_TARGET_NUM "573028554569"
+#define N8N_WEBHOOK_URL      "http://192.168.5.134:5678/webhook/safestep-alert"
+

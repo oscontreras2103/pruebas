@@ -69,9 +69,9 @@ bool sendWhatsAppAlert(const String &levelName, float mag, const String &timeStr
   }
 
   HTTPClient http;
-  http.begin(WA_API_URL);
+  http.begin(EVOLUTION_API_URL);
   http.addHeader("Content-Type", "application/json");
-  http.addHeader("Authorization", String("Bearer ") + WA_TOKEN);
+  http.addHeader("apikey", EVOLUTION_API_KEY);
 
   String headerTitle = (levelName == "Fuerte") 
                        ? "🚨 *ALERTA MÉDICA: CAÍDA DETECTADA*" 
@@ -89,16 +89,15 @@ bool sendWhatsAppAlert(const String &levelName, float mag, const String &timeStr
                        "🕒 *Fecha y Hora (Bogotá):* " + timeStr + "\\n"
                        "ℹ️ *Acción:* " + actionText;
 
-  String payload = "{\"messaging_product\":\"whatsapp\",\"to\":\"" + String(WA_TARGET_NUM) +
-                   "\",\"type\":\"text\",\"text\":{\"body\":\"" + messageBody + "\"}}";
+  String payload = "{\"number\":\"" + String(EVOLUTION_TARGET_NUM) + "\",\"text\":\"" + messageBody + "\"}";
 
   int httpResponseCode = http.POST(payload);
   bool success = (httpResponseCode > 0 && httpResponseCode < 300);
   
   if (!success) {
-    Serial.printf("[HTTP] Error enviando WhatsApp. Código: %d\n", httpResponseCode);
+    Serial.printf("[Evolution] Error enviando WhatsApp. Código: %d\n", httpResponseCode);
   } else {
-    Serial.println("[HTTP] Notificación WhatsApp enviada con éxito.");
+    Serial.println("📱 [Evolution WhatsApp] ¡Alerta enviada exitosamente a WhatsApp!");
   }
   
   http.end();
