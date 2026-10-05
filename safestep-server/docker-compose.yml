@@ -1,0 +1,74 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: safestep_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: evolution
+      POSTGRES_PASSWORD: evolution_pass_2026
+      POSTGRES_DB: evolution
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - safestep-net
+
+  evolution-api:
+    image: evoapicloud/evolution-api:v2.3.0
+    container_name: evolution_api
+    restart: always
+    depends_on:
+      - postgres
+    ports:
+      - "8080:8080"
+    environment:
+      - SERVER_URL=http://localhost:8080
+      - AUTHENTICATION_API_KEY=safestep_evolution_key_2026
+      - AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES=true
+      - DATABASE_ENABLED=true
+      - DATABASE_PROVIDER=postgresql
+      - DATABASE_CONNECTION_URI=postgresql://evolution:evolution_pass_2026@postgres:5432/evolution
+      - DATABASE_SAVE_DATA_INSTANCE=true
+      - DATABASE_SAVE_DATA_NEW_MESSAGE=true
+      - DATABASE_SAVE_MESSAGE_UPDATE=true
+      - DATABASE_SAVE_DATA_CONTACTS=true
+      - DATABASE_SAVE_DATA_CHATS=true
+      - REDIS_ENABLED=false
+      - CACHE_REDIS_ENABLED=false
+      - CACHE_LOCAL_ENABLED=true
+      - QRCODE_LIMIT=30
+      - LOG_LEVEL=ERROR,WARN,INFO
+      - DEL_INSTANCE=false
+      - CONFIG_SESSION_PHONE_CLIENT=SafeStep Edge
+      - CONFIG_SESSION_PHONE_NAME=Chrome
+    volumes:
+      - evolution_instances:/evolution/instances
+    networks:
+      - safestep-net
+
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: safestep_n8n
+    restart: always
+    ports:
+      - "5678:5678"
+    environment:
+      - N8N_HOST=0.0.0.0
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - N8N_SECURE_COOKIE=false
+      - WEBHOOK_URL=http://10.77.222.27:5678/
+      - GENERIC_TIMEZONE=America/Bogota
+      - TZ=America/Bogota
+    volumes:
+      - n8n_data:/home/node/.n8n
+    networks:
+      - safestep-net
+
+volumes:
+  postgres_data:
+  evolution_instances:
+  n8n_data:
+
+networks:
+  safestep-net:
+    driver: bridge

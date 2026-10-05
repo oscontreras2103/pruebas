@@ -1,0 +1,107 @@
+{
+  "name": "SafeStep Multi-Recipient WhatsApp Alert",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "safestep-alert",
+        "responseMode": "onReceived",
+        "responseData": "{\"status\":\"received\"}",
+        "options": {}
+      },
+      "id": "1",
+      "name": "Webhook ESP32",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        300
+      ],
+      "webhookId": "safestep-alert"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://evolution-api:8080/message/sendText/safestep",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "safestep_evolution_key_2026"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\\n  \"number\": \"573028554569\",\\n  \"text\": \"\ud83d\udea8 *ALERTA M\u00c9DICA SAFESTEP*\\\\n\\\\n\ud83d\udc64 *Paciente:* \" + $json.body.paciente + \"\\\\n\ud83d\udccd *Ubicaci\u00f3n:* \" + $json.body.habitacion + \"\\\\n\u26a0\ufe0f *Severidad:* \" + $json.body.severidad + \"\\\\n\ud83d\udca5 *Impacto:* \" + $json.body.impacto + \" m/s\u00b2\\\\n\ud83d\udd52 *Hora:* \" + $json.body.fecha_hora + \"\\\\n\\\\n\u2139\ufe0f *Acci\u00f3n:* \" + ($json.body.severidad === \"Fuerte\" ? \"Se confirma ca\u00edda. \u00a1Se solicita atenci\u00f3n m\u00e9dica inmediata!\" : \"Posible ca\u00edda detectada. Se recomienda revisi\u00f3n preventiva.\")\\n}",
+        "options": {}
+      },
+      "id": "2",
+      "name": "WhatsApp - Contacto 1",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        520,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://evolution-api:8080/message/sendText/safestep",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "safestep_evolution_key_2026"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\\n  \"number\": \"573196090727\",\\n  \"text\": \"\ud83d\udea8 *ALERTA M\u00c9DICA SAFESTEP*\\\\n\\\\n\ud83d\udc64 *Paciente:* \" + $json.body.paciente + \"\\\\n\ud83d\udccd *Ubicaci\u00f3n:* \" + $json.body.habitacion + \"\\\\n\u26a0\ufe0f *Severidad:* \" + $json.body.severidad + \"\\\\n\ud83d\udca5 *Impacto:* \" + $json.body.impacto + \" m/s\u00b2\\\\n\ud83d\udd52 *Hora:* \" + $json.body.fecha_hora + \"\\\\n\\\\n\u2139\ufe0f *Acci\u00f3n:* \" + ($json.body.severidad === \"Fuerte\" ? \"Se confirma ca\u00edda. \u00a1Se solicita atenci\u00f3n m\u00e9dica inmediata!\" : \"Posible ca\u00edda detectada. Se recomienda revisi\u00f3n preventiva.\")\\n}",
+        "options": {}
+      },
+      "id": "3",
+      "name": "WhatsApp - Contacto 2",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        520,
+        420
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook ESP32": {
+      "main": [
+        [
+          {
+            "node": "WhatsApp - Contacto 1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "WhatsApp - Contacto 2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

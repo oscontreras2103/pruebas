@@ -2,6 +2,7 @@
 #include <WiFi.h>
 #include <ESPmDNS.h>
 #include <HTTPClient.h>
+#include <WiFiClientSecure.h>
 #include <WebServer.h>
 #include <Adafruit_MPU6050.h>
 #include <Adafruit_Sensor.h>
@@ -68,11 +69,6 @@ bool sendWhatsAppAlert(const String &levelName, float mag, const String &timeStr
     return false;
   }
 
-  HTTPClient http;
-  http.begin(EVOLUTION_API_URL);
-  http.addHeader("Content-Type", "application/json");
-  http.addHeader("apikey", EVOLUTION_API_KEY);
-
   String headerTitle = (levelName == "Fuerte") 
                        ? "🚨 *ALERTA MÉDICA: CAÍDA DETECTADA*" 
                        : "⚠️ *AVISO MÉDICO: POSIBLE CAÍDA*";
@@ -89,19 +85,41 @@ bool sendWhatsAppAlert(const String &levelName, float mag, const String &timeStr
                        "🕒 *Fecha y Hora (Bogotá):* " + timeStr + "\\n"
                        "ℹ️ *Acción:* " + actionText;
 
-  String payload = "{\"number\":\"" + String(EVOLUTION_TARGET_NUM) + "\",\"text\":\"" + messageBody + "\"}";
+  // Lista de destinatarios directos en Evolution API
+  const char* targetNumbers[] = { EVOLUTION_TARGET_NUM, EVOLUTION_TARGET_NUM2 };
+  int totalTargets = sizeof(targetNumbers) / sizeof(targetNumbers[0]);
 
-  int httpResponseCode = http.POST(payload);
-  bool success = (httpResponseCode > 0 && httpResponseCode < 300);
-  
-  if (!success) {
-    Serial.printf("[Evolution] Error enviando WhatsApp. Código: %d\n", httpResponseCode);
-  } else {
-    Serial.println("📱 [Evolution WhatsApp] ¡Alerta enviada exitosamente a WhatsApp!");
+  WiFiClient client;
+  HTTPClient http;
+  http.setTimeout(5000);
+
+  bool anySuccess = false;
+  for (int i = 0; i < totalTargets; i++) {
+    if (http.begin(client, EVOLUTION_API_URL)) {
+      http.addHeader("Content-Type", "application/json");
+      http.addHeader("apikey", EVOLUTION_API_KEY);
+
+      String payload = "{\"number\":\"" + String(targetNumbers[i]) + "\",\"text\":\"" + messageBody + "\"}";
+      int httpCode = http.POST(payload);
+      if (httpCode > 0 && httpCode < 300) {
+        Serial.printf("📱 [Evolution WhatsApp] Alerta enviada a %s exitosamente.\n", targetNumbers[i]);
+        anySuccess = true;
+      } else {
+        Serial.printf("[Evolution] Error al enviar a %s. Código: %d (%s)\n", targetNumbers[i], httpCode, http.errorToString(httpCode).c_str());
+      }
+      http.end();
+    }
   }
-  
-  http.end();
-  return success;
+
+  // Notificar en paralelo a n8n para registro y automatizaciones
+  if (http.begin(client, N8N_WEBHOOK_URL)) {
+    http.addHeader("Content-Type", "application/json");
+    String n8nPayload = "{\"paciente\":\"" + String(PATIENT_NAME) + "\",\"habitacion\":\"" + String(PATIENT_ROOM) + "\",\"severidad\":\"" + levelName + "\",\"impacto\":" + String(mag, 2) + ",\"fecha_hora\":\"" + timeStr + "\"}";
+    http.POST(n8nPayload);
+    http.end();
+  }
+
+  return anySuccess;
 }
 
 String makeDataJson() {
@@ -140,41 +158,47 @@ String makeAlertsJson() {
   return s;
 }
 
+volatile bool pendingAlertSync = false;
+String pendingAlertPayload = "";
+
+void syncAlertToFirebase(const String &timeStr, const String &level, float mag, bool sent) {
+  pendingAlertPayload = "{\"time\":\"" + timeStr + "\",\"level\":\"" + level + "\",\"mag\":" + String(mag, 2) + ",\"sent\":" + (sent ? "true" : "false") + "}";
+  pendingAlertSync = true;
+}
+
 void syncTelemetryToFirebase() {
-  if (WiFi.status() != WL_CONNECTED) return;
-  HTTPClient http;
-  http.begin(String(FIREBASE_URL) + "/telemetry.json");
-  http.addHeader("Content-Type", "application/json");
-  http.setTimeout(2000);
-  http.PUT(makeDataJson());
-  http.end();
+  // Manejado en segundo plano por firebaseTask en Core 0
 }
 
 void firebaseTask(void *pvParameters) {
-  // Esperar a que el sistema inicialice
   vTaskDelay(pdMS_TO_TICKS(2000));
   for (;;) {
     if (WiFi.status() == WL_CONNECTED) {
-      HTTPClient http;
-      http.begin(String(FIREBASE_URL) + "/telemetry.json");
-      http.addHeader("Content-Type", "application/json");
-      http.setTimeout(2000);
-      http.PUT(makeDataJson());
-      http.end();
-    }
-    vTaskDelay(pdMS_TO_TICKS(1500));
-  }
-}
+      if (pendingAlertSync) {
+        pendingAlertSync = false;
+        WiFiClientSecure fbAlertClient;
+        fbAlertClient.setInsecure();
+        HTTPClient httpAlert;
+        if (httpAlert.begin(fbAlertClient, String(FIREBASE_URL) + "/alerts.json")) {
+          httpAlert.addHeader("Content-Type", "application/json");
+          httpAlert.setTimeout(3000);
+          httpAlert.POST(pendingAlertPayload);
+          httpAlert.end();
+        }
+      }
 
-void syncAlertToFirebase(const String &timeStr, const String &level, float mag, bool sent) {
-  if (WiFi.status() != WL_CONNECTED) return;
-  HTTPClient http;
-  http.begin(String(FIREBASE_URL) + "/alerts.json");
-  http.addHeader("Content-Type", "application/json");
-  http.setTimeout(1500);
-  String payload = "{\"time\":\"" + timeStr + "\",\"level\":\"" + level + "\",\"mag\":" + String(mag, 2) + ",\"sent\":" + (sent ? "true" : "false") + "}";
-  http.POST(payload);
-  http.end();
+      WiFiClientSecure fbClient;
+      fbClient.setInsecure();
+      HTTPClient http;
+      if (http.begin(fbClient, String(FIREBASE_URL) + "/telemetry.json")) {
+        http.addHeader("Content-Type", "application/json");
+        http.setTimeout(3000);
+        http.PUT(makeDataJson());
+        http.end();
+      }
+    }
+    vTaskDelay(pdMS_TO_TICKS(2000));
+  }
 }
 
 void handleRoot() {
@@ -229,12 +253,17 @@ void setup() {
   // Inicialización I2C para DOIT DevKit V1 (SDA: GPIO 21, SCL: GPIO 22)
   Wire.begin(21, 22);
 
+  WiFi.disconnect(true);
+  delay(200);
   WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
   Serial.print("Conectando a Wi-Fi");
-  while (WiFi.status() != WL_CONNECTED) {
+  int wifiRetries = 0;
+  while (WiFi.status() != WL_CONNECTED && wifiRetries < 30) {
     delay(500);
     Serial.print(".");
+    wifiRetries++;
   }
   Serial.printf("\nConectado. IP asignada: %s\n", WiFi.localIP().toString().c_str());
 
