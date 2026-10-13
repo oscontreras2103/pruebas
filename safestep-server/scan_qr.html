@@ -71,20 +71,46 @@
     <h1>🛡️ SafeStep WhatsApp Gateway</h1>
     <p>Escanea este código QR desde tu celular en <strong>WhatsApp > Dispositivos vinculados</strong> para habilitar las alertas médicas.</p>
     
-    <div class="qr-box">
-      <img id="qrImg" class="qr-img" src="" alt="Cargando QR...">
+    <div class="qr-box" style="display:flex; align-items:center; justify-content:center; min-height:256px;">
+      <div id="loader" style="color:#0284c7; font-weight:600;">⏳ Cargando código QR...</div>
+      <img id="qrImg" class="qr-img" src="" alt="Código QR" style="display:none;">
     </div>
 
-    <div>
-      <span id="statusBadge" class="badge badge-connecting">Esperando escaneo QR...</span>
+    <div style="margin-top: 15px;">
+      <span id="statusBadge" class="badge badge-connecting">Obteniendo código QR...</span>
+    </div>
+
+    <div style="margin-top: 20px; display: flex; gap: 10px; justify-content: center;">
+      <button id="reloadBtn" onclick="fetchNewQR()" style="background:#0284c7; color:#fff; border:none; border-radius:10px; padding:10px 18px; font-weight:600; cursor:pointer;">🔄 Generar nuevo QR</button>
+      <button id="resetBtn" onclick="resetInstance()" style="background:#dc2626; color:#fff; border:none; border-radius:10px; padding:10px 18px; font-weight:600; cursor:pointer;">⚠️ Reiniciar Sesión</button>
     </div>
   </div>
 
   <script>
-    async function checkQR() {
+    let isConnected = false;
+    const API_BASE = "http://127.0.0.1:8080";
+    const API_KEY = "safestep_evolution_key_2026";
+
+    async function fetchNewQR() {
+      const badge = document.getElementById("statusBadge");
+      const img = document.getElementById("qrImg");
+      const loader = document.getElementById("loader");
+      const reloadBtn = document.getElementById("reloadBtn");
+
+      if (reloadBtn) {
+        reloadBtn.disabled = true;
+        reloadBtn.innerText = "Cargando...";
+      }
+      if (badge) {
+        badge.className = "badge badge-connecting";
+        badge.innerText = "Obteniendo código QR...";
+      }
+      if (loader) loader.style.display = "block";
+      if (img) img.style.display = "none";
+
       try {
-        const res = await fetch("http://localhost:8080/instance/connect/safestep", {
-          headers: { "apikey": "safestep_evolution_key_2026" }
+        const res = await fetch(`${API_BASE}/instance/connect/safestep`, {
+          headers: { "apikey": API_KEY }
         });
         const data = await res.json();
         
@@ -96,25 +122,76 @@
           if (!b64.startsWith("data:image")) {
             b64 = "data:image/png;base64," + b64;
           }
-          document.getElementById("qrImg").src = b64;
-        }
-
-        // Consultar estado de la conexión
-        const stRes = await fetch("http://localhost:8080/instance/connectionState/safestep", {
-          headers: { "apikey": "safestep_evolution_key_2026" }
-        });
-        const stData = await stRes.json();
-        if (stData.instance && stData.instance.state === "open") {
-          document.getElementById("statusBadge").className = "badge badge-open";
-          document.getElementById("statusBadge").innerText = "✓ ¡WhatsApp Vinculado con Éxito!";
+          img.src = b64;
+          img.style.display = "block";
+          if (loader) loader.style.display = "none";
+          if (badge) badge.innerText = "Listo. Escanéalo antes de que expire (~30 seg)";
+        } else if (data.instance && data.instance.state === "open") {
+          isConnected = true;
+          if (badge) {
+            badge.className = "badge badge-open";
+            badge.innerText = "✓ ¡WhatsApp ya está vinculado!";
+          }
+          if (loader) loader.style.display = "none";
+          if (img) img.style.display = "none";
+          if (reloadBtn) reloadBtn.style.display = "none";
         }
       } catch (e) {
-        console.error(e);
+        console.error("Error al cargar QR:", e);
+        if (loader) loader.innerText = "❌ Error conectando a Evolution API";
+        if (badge) badge.innerText = "Error de red con Evolution API (127.0.0.1:8080)";
+      } finally {
+        if (reloadBtn) {
+          reloadBtn.disabled = false;
+          reloadBtn.innerText = "🔄 Generar nuevo QR";
+        }
       }
     }
 
-    checkQR();
-    setInterval(checkQR, 5000);
+    async function checkState() {
+      if (isConnected) return;
+      try {
+        const res = await fetch(`${API_BASE}/instance/connectionState/safestep`, {
+          headers: { "apikey": API_KEY }
+        });
+        const data = await res.json();
+        if (data.instance && data.instance.state === "open") {
+          isConnected = true;
+          const badge = document.getElementById("statusBadge");
+          if (badge) {
+            badge.className = "badge badge-open";
+            badge.innerText = "✓ ¡WhatsApp Vinculado con Éxito!";
+          }
+          const img = document.getElementById("qrImg");
+          if (img) img.style.opacity = "0.3";
+          const reloadBtn = document.getElementById("reloadBtn");
+          if (reloadBtn) reloadBtn.style.display = "none";
+        }
+      } catch (e) {
+        // Ignorar errores de sondeo en segundo plano
+      }
+    }
+
+    async function resetInstance() {
+      if (!confirm("¿Deseas reiniciar la sesión de WhatsApp para empezar desde cero?")) return;
+      const badge = document.getElementById("statusBadge");
+      if (badge) badge.innerText = "Reiniciando sesión...";
+      try {
+        await fetch(`${API_BASE}/instance/logout/safestep`, {
+          method: "DELETE",
+          headers: { "apikey": API_KEY }
+        });
+        setTimeout(fetchNewQR, 2000);
+      } catch(e) {
+        alert("Error al reiniciar: " + e.message);
+      }
+    }
+
+    // Cargar QR inicial
+    fetchNewQR();
+
+    // Sondear solo el estado de conexión sin regenerar el QR
+    setInterval(checkState, 2500);
   </script>
 </body>
 </html>
