@@ -1,77 +1,137 @@
-# SafeStep 🛡️
-> *"Usar SafeStep es dar pasos seguros"*
+# SafeStep
 
-Sistema asistencial de telemetría y detección temprana de caídas para pacientes hospitalarios y adultos mayores, basado en **ESP32**, sensor inercial **MPU6050**, **Google Firebase Realtime Database** y la API oficial de **Meta WhatsApp Cloud**.
+> "Usar SafeStep es dar pasos seguros"
 
----
-
-## 📋 Descripción del Proyecto
-SafeStep es un dispositivo IoT wearable y plataforma clínica diseñada como Trabajo de Grado. El sistema monitorea en tiempo real la cinemática del paciente a 50 Hz, clasifica eventos anómalos mediante umbrales de aceleración vectorial calibrados experimentalmente, y emite alertas críticas multicanal:
-1. **Notificación directa a WhatsApp** del personal asistencial con datos del paciente, habitación, aceleración pico y hora oficial de Bogotá (NTP UTC-5).
-2. **Streaming global en la nube** hacia Google Firebase Realtime Database con latencia sub-segundo.
-3. **Centro de Monitoreo Web** (tanto local en el ESP32 como en la nube para Vercel/Netlify) con Pop-up de emergencia visual y alarma sonora de dos tonos.
+Sistema asistencial de telemetria y deteccion temprana de caidas para pacientes hospitalarios y adultos mayores, basado en microcontrolador **ESP32**, sensor inercial **MPU6050**, infraestructura de microservicios con **Evolution API** y **n8n** en Docker, y sincronizacion en la nube con **Google Firebase Realtime Database**.
 
 ---
 
-## 🛠️ Arquitectura de Hardware y Pines
-- **Placa**: DOIT ESP32 DevKit V1 (240 MHz, Dual Core)
-- **Sensor Inercial**: MPU6050 (Acelerómetro $\pm 8\text{g}$ + Giroscopio $\pm 500^\circ/\text{s}$)
-- **Conexión I2C**:
-  - `GPIO 21` ➡️ **SDA**
-  - `GPIO 22` ➡️ **SCL**
-  - `3.3V / 5V` ➡️ **VCC**
-  - `GND` ➡️ **GND**
+## Descripcion del Proyecto
+
+SafeStep es un dispositivo IoT wearable y plataforma clinica disenada como Trabajo de Grado. El sistema monitorea en tiempo real la cinematica del paciente a una frecuencia de muestreo de 50 Hz (intervalos de 20 ms), clasifica eventos anomalos mediante umbrales de aceleracion vectorial calibrados experimentalmente para su colocacion en el bicep, y emite alertas criticas a traves de multiples canales:
+
+1. **Notificacion directa a WhatsApp** a traves de Evolution API (motor Baileys en Docker) a los contactos medicos y familiares registrados, transmitiendo nombre del paciente, habitacion, magnitud del impacto en m/s2 y hora oficial (NTP America/Bogota, UTC-5).
+2. **Orquestacion de alertas via n8n** mediante webhooks para distribucion paralela y automatizaciones clinicas.
+3. **Telemetria continua en la nube** con Google Firebase Realtime Database mediante peticiones HTTP asincronas en el Core 0 de FreeRTOS.
+4. **Centro de Monitoreo Web** tanto de forma local embebida en el ESP32 (puerto 80) como en la aplicacion cloud (`web_cloud/`) con soporte de Server-Sent Events (SSE), modal visual de emergencia y alarma sonora de advertencia.
 
 ---
 
-## 📊 Umbrales de Detección Calibrados
+## Umbrales de Deteccion Calibrados
 
-| Nivel | Rango de Magnitud | Acción Clínica | Notificación WhatsApp |
-| :--- | :--- | :--- | :---: |
-| **Estable** | $< 20.0\text{ m/s}^2$ | Reposo seguro | No |
-| **Moderado** | $20.0 \le \text{mag} < 30.0\text{ m/s}^2$ | Posible caída (revisión preventiva) | Sí |
-| **Fuerte** | $\ge 30.0\text{ m/s}^2$ | ¡Caída detectada! (Asistencia inmediata) | Sí + Pop-up + Sirena |
+Los umbrales se calculan a partir de la magnitud de aceleracion vectorial tridimensional:
+
+$$\text{Magnitud} = \sqrt{a_x^2 + a_y^2 + a_z^2}$$
+
+Calibrados experimentalmente para la cinematica del brazo (bicep):
+
+| Nivel | Rango de Magnitud | Clasificacion Clinica | Accion del Sistema |
+| :--- | :--- | :--- | :--- |
+| **Estable** | $< 17.00\text{ m/s}^2$ | Reposo seguro / Actividad cotidiana normal | Monitoreo continuo y transmision de telemetria base. |
+| **Leve** | $17.00\text{ m/s}^2 \le \text{mag} < 20.00\text{ m/s}^2$ | Posible caida / Impacto o perdida de equilibrio leve | Alerta preventiva a WhatsApp y registro en base de datos. |
+| **Fuerte** | $\ge 20.00\text{ m/s}^2$ | Caida fuerte confirmada / Impacto critico | Alerta de emergencia prioritaria a WhatsApp, notificacion a n8n, modal de caida y alarma sonora en el panel. |
 
 ---
 
-## 🚀 Puesta en Marcha
+## Arquitectura de Hardware y Pines
+
+- **Microcontrolador**: DOIT ESP32 DevKit V1 (Xtensa Dual-Core 240 MHz, 320 KB SRAM, 4 MB Flash)
+- **Sensor Inercial**: MPU6050 (Acelerometro +/- 8g, Giroscopio +/- 500 deg/s)
+- **Conexion I2C**:
+  - GPIO 21 -> SDA
+  - GPIO 22 -> SCL
+  - 3.3V / 5V -> VCC
+  - GND -> GND
+
+---
+
+## Arquitectura de Software y Distribucion por Nucleos
+
+El firmware implementa particionamiento de tareas mediante FreeRTOS para garantizar que las peticiones de red no interrumpan la medicion inercial:
+
+- **Core 1 (Hilo Principal)**:
+  - Muestreo periodico del sensor MPU6050 a 50 Hz.
+  - Calculo de magnitud vectorial y evaluacion de umbrales.
+  - Servidor web HTTP embebido (puerto 80).
+  - Despacho directo de alertas HTTP LAN hacia Evolution API y webhook de n8n.
+- **Core 0 (`firebaseTask`)**:
+  - Tarea en segundo plano para sincronizacion periodica de telemetria (cada 1000 - 2000 ms) hacia Firebase Realtime Database.
+  - Despacho asincrono de alertas pendientes mediante banderas volatiles para evitar bloqueos del procesador.
+
+---
+
+## Microservicios del Servidor (`safestep-server/`)
+
+La infraestructura de comunicacion opera bajo Docker Compose:
+
+- **`safestep_postgres`** (PostgreSQL 15): Persistencia de estados de sesion y metadatos.
+- **`evolution_api`** (Puerto 8080): Pasarela autonoma de WhatsApp basada en Baileys, eliminando limitaciones de plantillas y expiracion de tokens diarios.
+- **`safestep_n8n`** (Puerto 5678): Motor de integracion para recepcion de webhooks y entrega paralela a multiples destinatarios.
+
+### Puesta en Marcha del Servidor
+
+```bash
+cd safestep-server
+docker compose up -d
+```
+
+Para vincular la sesion de WhatsApp con Evolution API:
+- Abrir la interfaz de vinculacion en `http://127.0.0.1:3000` o ejecutar `scan_qr.html`.
+- Escanear el codigo QR desde WhatsApp (Dispositivos vinculados).
+
+---
+
+## Puesta en Marcha del Firmware
 
 ### 1. Requisitos
-- [PlatformIO IDE](https://platformio.org/) (extensión para VS Code o CLI).
-- Placa ESP32 y sensor MPU6050.
+- Visual Studio Code con PlatformIO IDE instalado.
+- Cable USB de datos para conexion con el ESP32.
 
-### 2. Configuración de Credenciales
-Crea el archivo `include/secrets.h` a partir de la plantilla:
-```bash
-cp include/secrets.example.h include/secrets.h
+### 2. Configuracion de Credenciales
+Crear el archivo `include/secrets.h` definiendo los parametros de red:
+```cpp
+#pragma once
+
+#define WIFI_SSID "TU_RED_WIFI"
+#define WIFI_PASS "TU_PASSWORD"
+
+#define FIREBASE_URL "https://safestep-97183-default-rtdb.firebaseio.com/patients/305"
 ```
-Edita `include/secrets.h` con:
-- Tu SSID y contraseña Wi-Fi.
-- Tu token de acceso de Meta for Developers (WhatsApp Cloud API).
-- La URL de tu base de datos Firebase Realtime Database.
 
-### 3. Compilación y Carga
+Verificar en `include/config.h` la IP del host donde corre Evolution API y n8n, asi como los numeros destinatarios:
+```cpp
+#define EVOLUTION_API_URL    "http://IP_DEL_SERVIDOR:8080/message/sendText/safestep"
+#define EVOLUTION_API_KEY    "safestep_evolution_key_2026"
+#define EVOLUTION_TARGET_NUM  "573028554569"
+#define EVOLUTION_TARGET_NUM2 "573196090727"
+#define N8N_WEBHOOK_URL      "http://IP_DEL_SERVIDOR:5678/webhook/safestep-alert"
+```
+
+### 3. Compilacion y Carga
+
 ```bash
-# Compilar proyecto
+# Compilar firmware
 platformio run --environment esp32doit-devkit-v1
 
-# Cargar firmware al ESP32
+# Cargar al microcontrolador
 platformio run --target upload
 
-# Abrir monitor serial (115200 baud)
+# Monitorear salida serial (115200 baud)
 platformio device monitor
 ```
 
 ---
 
-## 🌐 Aplicación Web en la Nube (`web_cloud/`)
-La carpeta `web_cloud/` contiene el dashboard clínico listo para despliegue público en **Vercel** o **Netlify**:
-- `index.html`: Interfaz del centro de monitoreo clínico.
-- `styles.css`: Hoja de estilos con efectos de desenfoque, glow de emergencia y diseño responsivo.
-- `app.js`: Cliente de streaming en tiempo real conectado a Firebase vía Server-Sent Events (SSE).
-- `vercel.json`: Reglas de enrutamiento para Vercel.
+## Aplicacion Web en la Nube (`web_cloud/`)
+
+El directorio `web_cloud/` contiene el panel clinico desacoplado, optimizado para ejecucion estatica o despliegue en Vercel:
+- `index.html`: Estructura semantica del panel de enfermeria.
+- `styles.css`: Diseno de alto contraste para visibilidad en estaciones medicas.
+- `app.js`: Conexion en tiempo real a Firebase Realtime Database mediante Server-Sent Events (SSE) y gestion de alarmas sonoras asistenciales.
+- `vercel.json`: Configuracion de cabeceras de despliegue.
 
 ---
 
-## 📄 Licencia y Créditos
-Desarrollado como Trabajo de Grado &copy; 2026. Todos los derechos reservados.
+## Licencia y Creditos
+
+Proyecto desarrollado como Trabajo de Grado (c) 2026. Todos los derechos reservados.
