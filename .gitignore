@@ -11,3 +11,6 @@ compile_commands.json
 
 # Credenciales y Secretos (Seguridad)
 include/secrets.h
+
+# Documentos privados locales
+DOCUMENTACION_DETALLADA_PROYECTO_DE_GRADO.md
